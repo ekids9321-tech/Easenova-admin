@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EaseNova Admin</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#172033;background:#f4f7fb}
+*{box-sizing:border-box}body{margin:0}header{background:#102a43;color:white;padding:18px 16px}header h1{margin:0;font-size:23px}header p{margin:4px 0 0;color:#d8e6f3}
+main{max-width:1000px;margin:18px auto;padding:0 12px}.card{background:white;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 3px 12px #102a4308}
+h2{font-size:18px;margin:0 0 12px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+input,select,textarea,button{font:inherit;padding:11px;border-radius:9px;border:1px solid #cbd5e1;width:100%}button{background:#126e82;color:white;border:0;font-weight:650;cursor:pointer}button.secondary{background:#e7eef4;color:#172033}button.danger{background:#b42318}.small{font-size:13px;color:#526477}.hidden{display:none!important}.notice{padding:10px;border-radius:9px;background:#fff7d6;color:#6b4e00;margin:10px 0}.status{padding:9px;border-radius:8px;background:#e8f7ee;color:#17603a;margin:8px 0;white-space:pre-wrap}.item{border:1px solid #e2e8f0;padding:12px;border-radius:10px;margin:8px 0}.item strong{display:block}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.actions button{width:auto}.toprow{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}#qr{display:flex;justify-content:center;padding:12px}a{color:#126e82}footer{text-align:center;color:#64748b;padding:22px;font-size:12px}
+</style>
+</head>
+<body>
+<header><h1>EaseNova</h1><p>Digital Menu · Admin Control Center</p></header>
+<main>
+<div class="notice"><b>Setup needed:</b> Before using, enter your Supabase Project URL and anon/publishable key in the CONFIG section inside this file. Never put a service_role/secret key here.</div>
+<section id="setup" class="card">
+<h2>1. Connect Supabase</h2>
+<div class="row"><input id="projectUrl" placeholder="Supabase Project URL (https://....supabase.co)"><input id="anonKey" placeholder="Supabase anon / publishable key"></div>
+<div class="actions"><button id="saveConfig">Save connection on this device</button><button class="secondary" id="testConfig">Connect / reload</button></div>
+<p class="small">Find these in Supabase → Project Settings → API (or Data API / API Keys). Use the public anon/publishable key only.</p><div id="setupMsg"></div>
+</section>
+<section id="auth" class="card">
+<h2>2. Admin login</h2><p class="small">Use your own admin email. Create an account once, then sign in.</p>
+<div class="row"><input id="email" type="email" placeholder="Your admin email"><input id="password" type="password" placeholder="Password (at least 6 characters)"></div>
+<div class="actions"><button id="signup">Create account</button><button id="login">Log in</button><button id="logout" class="secondary hidden">Log out</button></div><div id="authMsg"></div>
+</section>
+<section id="dashboard" class="hidden">
+<div class="card">
+<div class="toprow"><h2>3. Add a dhaba</h2><span id="signedIn" class="small"></span></div>
+<div class="row"><input id="dhabaName" placeholder="Dhaba / restaurant name"><input id="whatsapp" placeholder="WhatsApp number with country code, e.g. 919876543210"><input id="address" placeholder="Address (optional)"></div>
+<div class="actions"><button id="addDhaba">Add dhaba</button><button id="refreshDhaba" class="secondary">Refresh list</button></div><div id="dhabaMsg"></div>
+</div>
+<div class="card">
+<h2>4. Choose a dhaba</h2><select id="dhabaSelect"><option value="">Loading dhabas…</option></select><div id="selectedInfo" class="small"></div>
+</div>
+<div class="card">
+<h2>5. Add menu item (Hindi + English)</h2>
+<div class="row"><input id="itemHi" placeholder="Item name in Hindi"><input id="itemEn" placeholder="Item name in English"><input id="price" type="number" min="0" step="0.01" placeholder="Price (₹)"><input id="category" placeholder="Category, e.g. Snacks / नाश्ता"></div>
+<div class="actions"><button id="addItem">Add item</button><button id="refreshItems" class="secondary">Refresh menu</button></div><div id="itemMsg"></div><div id="items"></div>
+</div>
+<div class="card">
+<h2>6. Public menu link and QR</h2><p class="small">After this HTML file is hosted on Netlify, the QR will point to this same page's public menu view.</p>
+<input id="publicLink" readonly placeholder="Choose a dhaba to generate its menu link">
+<div class="actions"><button id="makeQr">Generate QR</button><button id="copyLink" class="secondary">Copy link</button></div><div id="qr"></div><div id="qrMsg" class="small"></div>
+</div>
+</section>
+<section id="publicMenu" class="hidden card"><div class="toprow"><div><h2 id="publicName">Digital Menu</h2><p id="publicAddress" class="small"></p></div><button id="languageToggle" class="secondary">हिन्दी / English</button></div><div id="publicItems"></div><div class="card"><h2 id="orderTitle">Your order</h2><div id="cart"></div><input id="customerName" placeholder="Your name (optional)"><textarea id="orderNote" placeholder="Extra instructions (optional)"></textarea><button id="sendOrder">Send order on WhatsApp</button></div></section>
+</main><footer>EaseNova · Admin-only control · Keep your login password private</footer>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+let sb=null,user=null,selected=null,menuItems=[],cart={},isHindi=false,publicBusiness=null;
+const say=(id,msg,ok=false)=>{$(id).innerHTML=msg?`<div class="${ok?'status':'notice'}">${esc(msg)}</div>`:''};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const getUrl=()=>{
+ let raw=$('projectUrl').value.trim().replace(/\s/g,'').replace(/\/$/,'');
+ try{
+  const parsed=new URL(raw);
+  // Supabase Data API URL may be copied with /rest/v1; auth needs the project root.
+  parsed.pathname=parsed.pathname.replace(/\/(rest\/v1|auth\/v1|storage\/v1|functions\/v1|graphql\/v1)\/?$/i,'').replace(/\/$/,'');
+  parsed.search=''; parsed.hash='';
+  return parsed.origin + parsed.pathname;
+ }catch(e){return raw;}
+};
+function init(){
+ $('projectUrl').value=localStorage.getItem('en_sb_url')||'';
+ $('anonKey').value=localStorage.getItem('en_sb_key')||'';
+ const u=getUrl(),k=$('anonKey').value.trim();
+ if(u&&k) connect();
+ const params=new URLSearchParams(location.search), bid=params.get('menu');
+ if(bid) loadPublic(bid);
+}
+function connect(){
+ const u=getUrl(),k=$('anonKey').value.trim();
+ if(!u||!k){say('setupMsg','Project URL aur public anon/publishable key dono bharo.');return false}
+ try{sb=window.supabase.createClient(u,k);say('setupMsg','Supabase client ready. Ab admin account se login karo.',true);return true}
+ catch(e){say('setupMsg','Connection setup error: '+e.message);return false}
+}
+$('saveConfig').onclick=()=>{localStorage.setItem('en_sb_url',getUrl());localStorage.setItem('en_sb_key',$('anonKey').value.trim());connect()};
+$('testConfig').onclick=()=>{localStorage.setItem('en_sb_url',getUrl());localStorage.setItem('en_sb_key',$('anonKey').value.trim());if(connect()) checkSession()};
+async function checkSession(){if(!sb)return;const {data}=await sb.auth.getSession();user=data.session?.user||null;updateAuth();if(user)loadDhaba()}
+function updateAuth(){$('dashboard').classList.toggle('hidden',!user);$('logout').classList.toggle('hidden',!user);$('signedIn').textContent=user?'Signed in: '+user.email:''}
+$('signup').onclick=async()=>{if(!connect())return;const {data,error}=await sb.auth.signUp({email:$('email').value.trim(),password:$('password').value});if(error)say('authMsg',error.message);else say('authMsg','Account request sent. If email confirmation is enabled, confirm the email before login.',true)};
+$('login').onclick=async()=>{if(!connect())return;const {data,error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)say('authMsg',error.message);else{user=data.user;updateAuth();say('authMsg','Login successful.',true);loadDhaba()}};
+$('logout').onclick=async()=>{await sb.auth.signOut();user=null;selected=null;updateAuth();say('authMsg','Logged out.',true)};
+async function loadDhaba(){
+ if(!sb||!user)return;const {data,error}=await sb.from('businesses').select('*').eq('owner_id',user.id).order('created_at',{ascending:false});
+ if(error){say('dhabaMsg','Dhaba list load nahi hui: '+error.message);return}
+ const sel=$('dhabaSelect'),old=sel.value;sel.innerHTML='<option value="">Choose dhaba</option>';
+ (data||[]).forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;sel.appendChild(o)});
+ if(old&&data?.some(b=>b.id===old))sel.value=old;
+ if(sel.value)selectDhaba(sel.value);else {selected=null;$('selectedInfo').textContent=(data||[]).length?`${data.length} dhaba(s) available`:'Abhi koi dhaba add nahi hua.'}
+}
+$('addDhaba').onclick=async()=>{
+ if(!user)return say('dhabaMsg','Pehle login karo.');
+ const name=$('dhabaName').value.trim(),wa=$('whatsapp').value.replace(/\D/g,''),address=$('address').value.trim();
+ if(!name||!wa)return say('dhabaMsg','Dhabe ka naam aur WhatsApp number zaroori hai.');
+ const {data,error}=await sb.from('businesses').insert({owner_id:user.id,name,whatsapp_number:wa,address:address||null,is_active:true}).select().single();
+ if(error){say('dhabaMsg','Save nahi hua: '+error.message);return}
+ $('dhabaName').value='';$('whatsapp').value='';$('address').value='';say('dhabaMsg','Dhaba add ho gaya.',true);await loadDhaba();$('dhabaSelect').value=data.id;selectDhaba(data.id);
+};
+$('refreshDhaba').onclick=loadDhaba;
+$('dhabaSelect').onchange=()=>selectDhaba($('dhabaSelect').value);
+async function selectDhaba(id){if(!id){selected=null;return}const {data,error}=await sb.from('businesses').select('*').eq('id',id).single();if(error){say('dhabaMsg',error.message);return}selected=data;$('selectedInfo').textContent=`${data.name} · WhatsApp: ${data.whatsapp_number} · ${data.address||'Address not added'}`;await loadItems();updatePublicLink()}
+$('addItem').onclick=async()=>{
+ if(!selected)return say('itemMsg','Pehle dhaba choose karo.');
+ const name_hi=$('itemHi').value.trim(),name_en=$('itemEn').value.trim(),price=Number($('price').value),category=$('category').value.trim();
+ if(!name_hi||!name_en||$('price').value===''||price<0)return say('itemMsg','Hindi name, English name aur valid price bharo.');
+ const {error}=await sb.from('menu_items').insert({business_id:selected.id,name_hi,name_en,price,category:category||null,is_available:true});
+ if(error){say('itemMsg','Menu item save nahi hua: '+error.message);return}
+ ['itemHi','itemEn','price','category'].forEach(id=>$(id).value='');say('itemMsg','Menu item add ho gaya.',true);loadItems()
+};
+$('refreshItems').onclick=loadItems;
+async function loadItems(){if(!selected)return;const {data,error}=await sb.from('menu_items').select('*').eq('business_id',selected.id).order('created_at',{ascending:false});if(error){say('itemMsg','Menu load error: '+error.message);return}menuItems=data||[];renderItems()}
+function renderItems(){$('items').innerHTML=menuItems.map(it=>`<div class="item"><strong>${esc(it.name_hi)} / ${esc(it.name_en)} — ₹${Number(it.price).toFixed(2)}</strong><span class="small">${esc(it.category||'')}</span><div class="actions"><button class="danger" data-del="${it.id}">Delete</button></div></div>`).join('')||'<p class="small">Abhi menu item nahi hai.</p>';document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(!confirm('Is menu item ko delete karna hai?'))return;const {error}=await sb.from('menu_items').delete().eq('id',b.dataset.del);if(error)say('itemMsg',error.message);else loadItems()})}
+function updatePublicLink(){if(!selected)return;$('publicLink').value=location.origin+location.pathname+'?menu='+encodeURIComponent(selected.id)}
+$('makeQr').onclick=()=>{if(!selected)return say('qrMsg','Pehle dhaba choose karo.');updatePublicLink();$('qr').innerHTML='';if(!window.QRCode){say('qrMsg','QR library load nahi hui. Internet on karke reload karo.');return}new QRCode($('qr'),{text:$('publicLink').value,width:220,height:220});say('qrMsg','QR ready. Website ko Netlify par publish karne ke baad hi public QR share karo.',true)};
+$('copyLink').onclick=async()=>{if(!$('publicLink').value)return;try{await navigator.clipboard.writeText($('publicLink').value);say('qrMsg','Link copied.',true)}catch(e){$('publicLink').select();say('qrMsg','Link select ho gaya—Copy dabao.') }};
+async function loadPublic(id){
+ if(!connect())return;
+ const {data:b,error}=await sb.from('businesses').select('*').eq('id',id).eq('is_active',true).single();
+ if(error||!b){document.body.innerHTML='<main><div class="card"><h2>Menu not found</h2><p>Link galat hai ya menu abhi available nahi hai.</p></div></main>';return}
+ publicBusiness=b;const {data:items}=await sb.from('menu_items').select('*').eq('business_id',id).eq('is_available',true).order('created_at');
+ menuItems=items||[];$('setup').classList.add('hidden');$('auth').classList.add('hidden');$('dashboard').classList.add('hidden');$('publicMenu').classList.remove('hidden');$('publicName').textContent=b.name;$('publicAddress').textContent=b.address||'';renderPublic()
+}
+function renderPublic(){$('publicItems').innerHTML=menuItems.map(it=>`<div class="item"><strong>${esc(isHindi?it.name_hi:it.name_en)} — ₹${Number(it.price).toFixed(2)}</strong>${it.category?`<span class="small">${esc(it.category)}</span>`:''}<div class="actions"><button data-add="${it.id}">+ Add</button><button class="secondary" data-remove="${it.id}">−</button></div><span id="qty-${it.id}" class="small">${cart[it.id]||0} selected</span></div>`).join('')||'<p>No menu items available.</p>';document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{cart[b.dataset.add]=(cart[b.dataset.add]||0)+1;renderPublic();renderCart()});document.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{cart[b.dataset.remove]=Math.max(0,(cart[b.dataset.remove]||0)-1);renderPublic();renderCart()});renderCart()}
+function renderCart(){const chosen=menuItems.filter(i=>(cart[i.id]||0)>0);$('cart').innerHTML=chosen.map(i=>`${esc(isHindi?i.name_hi:i.name_en)} × ${cart[i.id]} = ₹${(Number(i.price)*cart[i.id]).toFixed(2)}`).join('<br>')||'<p class="small">No items selected.</p>';const total=chosen.reduce((s,i)=>s+Number(i.price)*cart[i.id],0);if(chosen.length)$('cart').innerHTML+=`<hr><b>Total: ₹${total.toFixed(2)}</b>`}
+$('languageToggle').onclick=()=>{isHindi=!isHindi;$('orderTitle').textContent=isHindi?'आपका ऑर्डर':'Your order';$('sendOrder').textContent=isHindi?'WhatsApp पर ऑर्डर भेजें':'Send order on WhatsApp';renderPublic()};
+$('sendOrder').onclick=()=>{const chosen=menuItems.filter(i=>(cart[i.id]||0)>0);if(!chosen.length){alert('Please select menu items first.');return}const name=$('customerName').value.trim(),note=$('orderNote').value.trim();let msg=`Order for ${publicBusiness.name}%0A`;chosen.forEach(i=>msg+=`${encodeURIComponent(isHindi?i.name_hi:i.name_en)} x ${cart[i.id]} = ₹${(Number(i.price)*cart[i.id]).toFixed(2)}%0A`);const total=chosen.reduce((s,i)=>s+Number(i.price)*cart[i.id],0);msg+=`Total: ₹${total.toFixed(2)}%0A`;if(name)msg+=`Customer: ${encodeURIComponent(name)}%0A`;if(note)msg+=`Note: ${encodeURIComponent(note)}`;location.href=`https://wa.me/${publicBusiness.whatsapp_number}?text=${msg}`};
+init();
+})();
+</script>
+</body></html>
